@@ -4,6 +4,7 @@
 #include <memory>
 #include <iostream>
 #include <cstdint>
+#include "Policy.h"
 
 // Represents a single Autonomous System (Node)
 struct ASNode {
@@ -16,7 +17,12 @@ struct ASNode {
     std::vector<ASNode*> customers;
     std::vector<ASNode*> peers;
 
-    ASNode(uint32_t id) : asn(id) {}
+    // Each AS has a BGP policy to manage announcements
+    std::shared_ptr<Policy> policy;
+
+    int propagation_rank;
+
+    ASNode(uint32_t id) : asn(id), policy(std::make_shared<BGP>()), propagation_rank(-1) {}
 };
 
 class ASGraph {
@@ -37,6 +43,9 @@ public:
     // Check for provider cycles
     bool detectProviderCycles();
     
+    // Flatten the graph into ranks for propagation
+    std::vector<std::vector<ASNode*>> getRankedASes();
+
     // Get total node count (for verification)
     size_t getNumNodes() const { return nodes.size(); }
 };
