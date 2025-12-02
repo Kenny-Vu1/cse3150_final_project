@@ -18,6 +18,59 @@ void print_usage(const char* prog_name) {
               << " --relationships <file> --announcements <file> --rov-asns <file>\n";
 }
 
+// Returns true if ann1 is better than ann2, based on BGP best path selection
+bool is_better_announcement(const Announcement& ann1, const Announcement& ann2, const std::unordered_map<Relationship, int>& rel_scores) {
+    // Rule 1: Relationship (Customer > Peer > Provider)
+    int score1 = rel_scores.at(ann1.received_from_relationship);
+    int score2 = rel_scores.at(ann2.received_from_relationship);
+    if (score1 != score2) {
+        return score1 > score2;
+    }
+
+    // Rule 2: AS Path Length
+    if (ann1.as_path.size() != ann2.as_path.size()) {
+        return ann1.as_path.size() < ann2.as_path.size();
+    }
+
+    // Rule 3: Next Hop ASN (lower is better)
+    return ann1.next_hop_asn < ann2.next_hop_asn;
+}
+
+// Processes all announcements in a node's received_queue, resolves conflicts,
+// and updates its local_rib with the best announcement for each prefix.
+void process_announcements(ASNode* node, const std::unordered_map<Relationship, int>& rel_scores) {
+    BGP* policy = dynamic_cast<BGP*>(node->policy.get());
+    if (!policy || policy->received_queue.empty()) {
+        return;
+    }
+
+    for (auto const& [prefix, received_anns] : policy->received_queue) {
+        // Find the current best announcement for this prefix (if it exists)
+        Announcement* current_best = nullptr;
+        auto it = policy->local_rib.find(prefix);
+        if (it != policy->local_rib.end()) {
+            current_best = &it->second;
+        }
+
+        // Compare against all newly received announcements
+        for (const auto& new_ann_const : received_anns) {
+            // The new path if we adopt this announcement includes our own ASN
+            Announcement potential_new_ann = new_ann_const;
+            potential_new_ann.as_path.insert(potential_new_ann.as_path.begin(), node->asn);
+
+            if (current_best == nullptr || is_better_announcement(potential_new_ann, *current_best, rel_scores)) {
+                // If the new one is better, it becomes the new best.
+                // We update the local_rib directly, and our pointer to it.
+                policy->local_rib[prefix] = potential_new_ann;
+                current_best = &policy->local_rib[prefix];
+            }
+        }
+    }
+
+    policy->received_queue.clear();
+}
+
+
 int main(int argc, char* argv[]) {
     // ---------------------------------------------------------
     // 1. Argument Parsing
@@ -126,26 +179,23 @@ int main(int argc, char* argv[]) {
     auto ranked_ases = graph.getRankedASes();
     int max_rank = ranked_ases.size() - 1;
 
+    // Define relationship scores for conflict resolution
+    const std::unordered_map<Relationship, int> rel_scores = {
+        {Relationship::ORIGIN, 3},
+        {Relationship::CUSTOMER, 2},
+        {Relationship::PEER, 1},
+        {Relationship::PROVIDER, 0}
+    };
+
     // --- PHASE 1: PROPAGATE UP (Customers to Providers) ---
     std::cout << "  - Propagating UP from customers to providers...\n";
     for (int rank = 0; rank <= max_rank; ++rank) {
-        // First, all nodes at this rank process their received announcements
+        // First, all nodes at this rank process announcements they have received
         for (ASNode* node : ranked_ases[rank]) {
-            BGP* policy = dynamic_cast<BGP*>(node->policy.get());
-            if (!policy || policy->received_queue.empty()) continue;
-
-            for (auto const& [prefix, announcements] : policy->received_queue) {
-                // Ignoring conflicts: just process the first one received for a prefix
-                if (!announcements.empty()) {
-                    Announcement new_ann = announcements[0];
-                    new_ann.as_path.insert(new_ann.as_path.begin(), node->asn); // Prepend
-                    policy->local_rib[prefix] = new_ann;
-                }
-            }
-            policy->received_queue.clear();
+            process_announcements(node, rel_scores);
         }
 
-        // Second, all nodes at this rank send from their local RIB to providers
+        // Second, all nodes at this rank send from their updated local RIB to providers
         for (ASNode* node : ranked_ases[rank]) {
             BGP* policy = dynamic_cast<BGP*>(node->policy.get());
             if (!policy) continue;
@@ -187,36 +237,15 @@ int main(int argc, char* argv[]) {
 
     // Second, all ASes process announcements received from peers
     for (auto const& [asn, node_ptr] : graph.getNodes()) {
-        ASNode* node = node_ptr.get();
-        BGP* policy = dynamic_cast<BGP*>(node->policy.get());
-        if (!policy || policy->received_queue.empty()) continue;
-
-        for (auto const& [prefix, announcements] : policy->received_queue) {
-            if (!announcements.empty()) {
-                Announcement new_ann = announcements[0];
-                new_ann.as_path.insert(new_ann.as_path.begin(), node->asn); // Prepend
-                policy->local_rib[prefix] = new_ann;
-            }
-        }
-        policy->received_queue.clear();
+        process_announcements(node_ptr.get(), rel_scores);
     }
 
     // --- PHASE 3: PROPAGATE DOWN (Providers to Customers) ---
     std::cout << "  - Propagating DOWN from providers to customers...\n";
     for (int rank = max_rank; rank >= 0; --rank) {
-        // First, process any announcements received from the previous (higher) rank
+        // First, process any announcements received from the previous (higher) rank or peers
          for (ASNode* node : ranked_ases[rank]) {
-            BGP* policy = dynamic_cast<BGP*>(node->policy.get());
-            if (!policy || policy->received_queue.empty()) continue;
-
-            for (auto const& [prefix, announcements] : policy->received_queue) {
-                if (!announcements.empty()) {
-                    Announcement new_ann = announcements[0];
-                    new_ann.as_path.insert(new_ann.as_path.begin(), node->asn); // Prepend
-                    policy->local_rib[prefix] = new_ann;
-                }
-            }
-            policy->received_queue.clear();
+            process_announcements(node, rel_scores);
         }
 
         // Second, send from local RIB to all customers
