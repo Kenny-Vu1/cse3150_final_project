@@ -1,4 +1,6 @@
 #include "ASGraph.h"
+#include <queue>
+#include <algorithm>
 
 // Retrieve a node or create it if it doesn't exist
 ASNode* ASGraph::getOrCreateNode(uint32_t asn) {
@@ -72,4 +74,51 @@ bool ASGraph::hasProviderCycleDFS(ASNode* node,
     // Unmark from recursion stack
     recursionStack[asn] = false;
     return false;
+}
+
+std::vector<std::vector<ASNode*>> ASGraph::getRankedASes() {
+    std::queue<ASNode*> q;
+    std::unordered_map<uint32_t, size_t> customer_counts;
+    int max_rank = 0;
+
+    // Initialize ranks to 0 and calculate initial customer counts.
+    for (auto const& [asn, node_ptr] : nodes) {
+        node_ptr->propagation_rank = 0;
+        size_t count = node_ptr->customers.size();
+        customer_counts[asn] = count;
+        if (count == 0) {
+            q.push(node_ptr.get());
+        }
+    }
+
+    // Process nodes in topological order (customer to provider).
+    while (!q.empty()) {
+        ASNode* customer_node = q.front();
+        q.pop();
+
+        for (ASNode* provider_node : customer_node->providers) {
+            // A provider's rank is the max of its customers' ranks + 1.
+            provider_node->propagation_rank = std::max(
+                provider_node->propagation_rank,
+                customer_node->propagation_rank + 1
+            );
+            max_rank = std::max(max_rank, provider_node->propagation_rank);
+
+            // This provider has one less customer to be processed.
+            customer_counts[provider_node->asn]--;
+
+            // If all customers of this provider are processed, it's ready to be a "customer" for its own providers.
+            if (customer_counts[provider_node->asn] == 0) {
+                q.push(provider_node);
+            }
+        }
+    }
+
+    // Now that ranks are assigned, create the flattened vector structure.
+    std::vector<std::vector<ASNode*>> ranked_ases(max_rank + 1);
+    for (auto const& [asn, node_ptr] : nodes) {
+        ranked_ases[node_ptr->propagation_rank].push_back(node_ptr.get());
+    }
+
+    return ranked_ases;
 }
