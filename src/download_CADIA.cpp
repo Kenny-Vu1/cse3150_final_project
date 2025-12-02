@@ -135,3 +135,27 @@ std::string download_caida(int max_months_back) {
               << max_months_back << " months.\n";
     return "";
 }
+
+
+// ... (your existing code above) ...
+
+// Only compile this main if we are building the standalone downloader
+#ifdef STANDALONE_DOWNLOADER
+int main() {
+    std::cout << "Starting CAIDA downloader utility...\n";
+    
+    // Try to download, looking back up to 12 months
+    std::string result = download_caida(12);
+    
+    if (result.empty()) {
+        std::cerr << "Failed to download any CAIDA dataset.\n";
+        return 1;
+    }
+    
+    std::cout << "SUCCESS. File is ready at: " << result << "\n";
+    std::cout << "You can now run the simulator using:\n";
+    std::cout << "./bgp_simulator --relationships " << result << " ...\n";
+    
+    return 0;
+}
+#endif

@@ -1,0 +1,2 @@
+#!/bin/bash
+c++ src/*.cpp -Iinclude -o program.out -std=c++17 -lcurl
