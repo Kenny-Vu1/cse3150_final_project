@@ -48,4 +48,7 @@ public:
 
     // Get total node count (for verification)
     size_t getNumNodes() const { return nodes.size(); }
+
+    // Get a const reference to the nodes map for iteration
+    const std::unordered_map<uint32_t, std::shared_ptr<ASNode>>& getNodes() const { return nodes; }
 };

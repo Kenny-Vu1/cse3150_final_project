@@ -7,6 +7,8 @@
 // Integrate our helper modules
 #include "ASGraph.h"
 #include "parse_caida.h"
+#include "Announcement.h"
+#include "Policy.h"
 
 // TODO: Future headers
 // #include "Simulation.h" 
@@ -84,37 +86,198 @@ int main(int argc, char* argv[]) {
     // ---------------------------------------------------------
     // 4. Seed Announcements (Phase 3.4)
     // ---------------------------------------------------------
-    // TODO: Parse ann_file. Format: ASN, Prefix, rov_invalid.
-    // Seed these into the Local RIB of the specific ASNs.
-    
-    std::cout << "[Info] Announcements seeded (Placeholder).\n";
+    // For this example, we'll manually seed a single announcement
+    // instead of parsing the announcements file.
+    std::cout << "\n[Step 4] Seeding initial announcement...\n";
+
+    uint32_t seed_asn = 1;
+    ASNode* target_as = graph.getOrCreateNode(seed_asn);
+
+    if (target_as) {
+        std::string prefix = "1.2.0.0/16";
+        Announcement seed_announcement(
+            prefix,
+            {seed_asn},
+            seed_asn,
+            Relationship::ORIGIN
+        );
+
+        BGP* bgp_policy = dynamic_cast<BGP*>(target_as->policy.get());
+        if (bgp_policy) {
+            bgp_policy->local_rib[seed_announcement.prefix] = seed_announcement;
+            std::cout << "Successfully seeded prefix " << prefix << " at ASN " << seed_asn << ".\n";
+            // Optional: Verify it's there
+            bgp_policy->local_rib.find(prefix)->second.print();
+        } else {
+            std::cerr << "Error: Could not retrieve BGP policy for ASN " << seed_asn << std::endl;
+        }
+    } else {
+        std::cerr << "Error: Could not find or create ASN " << seed_asn << " for seeding." << std::endl;
+    }
+
 
 
     // ---------------------------------------------------------
     // 5. Run Propagation (Phase 3.5)
     // ---------------------------------------------------------
-    // TODO: Execute the propagation stages: Up, Across, Down.
+    std::cout << "\n[Step 5] Running BGP propagation...\n";
+
+    // Get the ranked graph structure for propagation
+    auto ranked_ases = graph.getRankedASes();
+    int max_rank = ranked_ases.size() - 1;
+
+    // --- PHASE 1: PROPAGATE UP (Customers to Providers) ---
+    std::cout << "  - Propagating UP from customers to providers...\n";
+    for (int rank = 0; rank <= max_rank; ++rank) {
+        // First, all nodes at this rank process their received announcements
+        for (ASNode* node : ranked_ases[rank]) {
+            BGP* policy = dynamic_cast<BGP*>(node->policy.get());
+            if (!policy || policy->received_queue.empty()) continue;
+
+            for (auto const& [prefix, announcements] : policy->received_queue) {
+                // Ignoring conflicts: just process the first one received for a prefix
+                if (!announcements.empty()) {
+                    Announcement new_ann = announcements[0];
+                    new_ann.as_path.insert(new_ann.as_path.begin(), node->asn); // Prepend
+                    policy->local_rib[prefix] = new_ann;
+                }
+            }
+            policy->received_queue.clear();
+        }
+
+        // Second, all nodes at this rank send from their local RIB to providers
+        for (ASNode* node : ranked_ases[rank]) {
+            BGP* policy = dynamic_cast<BGP*>(node->policy.get());
+            if (!policy) continue;
+
+            for (auto const& [prefix, ann] : policy->local_rib) {
+                for (ASNode* provider : node->providers) {
+                    BGP* provider_policy = dynamic_cast<BGP*>(provider->policy.get());
+                    if (provider_policy) {
+                        Announcement prop_ann = ann;
+                        prop_ann.next_hop_asn = node->asn;
+                        prop_ann.received_from_relationship = Relationship::CUSTOMER;
+                        provider_policy->received_queue[prefix].push_back(prop_ann);
+                    }
+                }
+            }
+        }
+    }
+
+    // --- PHASE 2: PROPAGATE ACROSS (to Peers) ---
+    std::cout << "  - Propagating ACROSS to peers...\n";
+    // First, all ASes send to their peers
+    for (auto const& [asn, node_ptr] : graph.getNodes()) {
+        ASNode* node = node_ptr.get();
+        BGP* policy = dynamic_cast<BGP*>(node->policy.get());
+        if (!policy) continue;
+
+        for (auto const& [prefix, ann] : policy->local_rib) {
+            for (ASNode* peer : node->peers) {
+                BGP* peer_policy = dynamic_cast<BGP*>(peer->policy.get());
+                if (peer_policy) {
+                    Announcement prop_ann = ann;
+                    prop_ann.next_hop_asn = node->asn;
+                    prop_ann.received_from_relationship = Relationship::PEER;
+                    peer_policy->received_queue[prefix].push_back(prop_ann);
+                }
+            }
+        }
+    }
+
+    // Second, all ASes process announcements received from peers
+    for (auto const& [asn, node_ptr] : graph.getNodes()) {
+        ASNode* node = node_ptr.get();
+        BGP* policy = dynamic_cast<BGP*>(node->policy.get());
+        if (!policy || policy->received_queue.empty()) continue;
+
+        for (auto const& [prefix, announcements] : policy->received_queue) {
+            if (!announcements.empty()) {
+                Announcement new_ann = announcements[0];
+                new_ann.as_path.insert(new_ann.as_path.begin(), node->asn); // Prepend
+                policy->local_rib[prefix] = new_ann;
+            }
+        }
+        policy->received_queue.clear();
+    }
+
+    // --- PHASE 3: PROPAGATE DOWN (Providers to Customers) ---
+    std::cout << "  - Propagating DOWN from providers to customers...\n";
+    for (int rank = max_rank; rank >= 0; --rank) {
+        // First, process any announcements received from the previous (higher) rank
+         for (ASNode* node : ranked_ases[rank]) {
+            BGP* policy = dynamic_cast<BGP*>(node->policy.get());
+            if (!policy || policy->received_queue.empty()) continue;
+
+            for (auto const& [prefix, announcements] : policy->received_queue) {
+                if (!announcements.empty()) {
+                    Announcement new_ann = announcements[0];
+                    new_ann.as_path.insert(new_ann.as_path.begin(), node->asn); // Prepend
+                    policy->local_rib[prefix] = new_ann;
+                }
+            }
+            policy->received_queue.clear();
+        }
+
+        // Second, send from local RIB to all customers
+        for (ASNode* node : ranked_ases[rank]) {
+            BGP* policy = dynamic_cast<BGP*>(node->policy.get());
+            if (!policy) continue;
+
+            for (auto const& [prefix, ann] : policy->local_rib) {
+                for (ASNode* customer : node->customers) {
+                    BGP* customer_policy = dynamic_cast<BGP*>(customer->policy.get());
+                    if (customer_policy) {
+                        Announcement prop_ann = ann;
+                        prop_ann.next_hop_asn = node->asn;
+                        prop_ann.received_from_relationship = Relationship::PROVIDER;
+                        customer_policy->received_queue[prefix].push_back(prop_ann);
+                    }
+                }
+            }
+        }
+    }
     
-    std::cout << "[Info] Propagation complete (Placeholder).\n";
+    std::cout << "[Info] Propagation complete.\n";
+
 
 
     // ---------------------------------------------------------
     // 6. Output Results (Phase 3.7)
     // ---------------------------------------------------------
+    std::cout << "\n[Step 6] Writing results to ribs.csv...\n";
     std::ofstream out_file("ribs.csv");
     if (!out_file.is_open()) {
         std::cerr << "Error: Could not open ribs.csv for writing.\n";
         return 1;
     }
 
-    // Write Header: "asn", "prefix", "as path"
+    // Write Header
     out_file << "asn,prefix,as path\n";
 
-    // TODO: Iterate through all AS nodes and their Local RIBs to dump data
-    // for (const auto& pair : graph.getNodes()) { // Assuming accessor exists
-    //      auto node = pair.second;
-    //      write_rib_to_file(out_file, node);
-    // }
+    // Iterate through all AS nodes and their Local RIBs to dump data
+    for (const auto& pair : graph.getNodes()) {
+        ASNode* node = pair.second.get();
+        BGP* policy = dynamic_cast<BGP*>(node->policy.get());
+
+        if (policy) {
+            for (const auto& rib_entry : policy->local_rib) {
+                const Announcement& ann = rib_entry.second;
+                
+                // Format the AS path
+                std::string path_str;
+                for (size_t i = 0; i < ann.as_path.size(); ++i) {
+                    path_str += std::to_string(ann.as_path[i]);
+                    if (i < ann.as_path.size() - 1) {
+                        path_str += "-";
+                    }
+                }
+
+                // Write to file
+                out_file << node->asn << "," << ann.prefix << "," << path_str << "\n";
+            }
+        }
+    }
 
     out_file.close();
     std::cout << "[Success] ribs.csv generated successfully.\n";

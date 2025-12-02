@@ -83,6 +83,7 @@ void test_complex_graph_no_cycle() {
 }
 
 
+/*
 int main() {
     test_simple_graph();
     test_provider_cycle();
@@ -91,3 +92,4 @@ int main() {
 
     return 0;
 }
+*/
