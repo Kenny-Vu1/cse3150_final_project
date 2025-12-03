@@ -83,13 +83,19 @@ void test_complex_graph_no_cycle() {
 }
 
 
-/*
 int main() {
+    std::cout << "========================================" << std::endl;
+    std::cout << "AS Graph Unit Tests" << std::endl;
+    std::cout << "========================================" << std::endl;
+    
     test_simple_graph();
     test_provider_cycle();
     test_peer_relationship();
     test_complex_graph_no_cycle();
-
+    
+    std::cout << "\n========================================" << std::endl;
+    std::cout << "All unit tests completed!" << std::endl;
+    std::cout << "========================================" << std::endl;
+    
     return 0;
 }
-*/

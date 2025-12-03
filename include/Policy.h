@@ -27,3 +27,11 @@ public:
     // Value: A list of all announcements received for that prefix.
     std::unordered_map<std::string, std::vector<Announcement>> received_queue;
 };
+
+// ROV (Route Origin Validation) policy extends BGP
+// ROV ASes drop announcements with rov_invalid=true
+class ROV : public BGP {
+public:
+    // ROV inherits all BGP functionality but filters invalid announcements
+    // This is handled in process_announcements by checking rov_invalid
+};

@@ -3,72 +3,23 @@
 #include <vector>
 #include <fstream>
 #include <cstdlib>
+#include <sstream>
+#include <unordered_set>
 
 // Integrate our helper modules
 #include "ASGraph.h"
 #include "parse_caida.h"
 #include "Announcement.h"
 #include "Policy.h"
-
-// TODO: Future headers
-// #include "Simulation.h" 
+#include "Propagation.h" 
 
 void print_usage(const char* prog_name) {
     std::cerr << "Usage: " << prog_name 
               << " --relationships <file> --announcements <file> --rov-asns <file>\n";
 }
 
-// Returns true if ann1 is better than ann2, based on BGP best path selection
-bool is_better_announcement(const Announcement& ann1, const Announcement& ann2, const std::unordered_map<Relationship, int>& rel_scores) {
-    // Rule 1: Relationship (Customer > Peer > Provider)
-    int score1 = rel_scores.at(ann1.received_from_relationship);
-    int score2 = rel_scores.at(ann2.received_from_relationship);
-    if (score1 != score2) {
-        return score1 > score2;
-    }
-
-    // Rule 2: AS Path Length
-    if (ann1.as_path.size() != ann2.as_path.size()) {
-        return ann1.as_path.size() < ann2.as_path.size();
-    }
-
-    // Rule 3: Next Hop ASN (lower is better)
-    return ann1.next_hop_asn < ann2.next_hop_asn;
-}
-
-// Processes all announcements in a node's received_queue, resolves conflicts,
-// and updates its local_rib with the best announcement for each prefix.
-void process_announcements(ASNode* node, const std::unordered_map<Relationship, int>& rel_scores) {
-    BGP* policy = dynamic_cast<BGP*>(node->policy.get());
-    if (!policy || policy->received_queue.empty()) {
-        return;
-    }
-
-    for (auto const& [prefix, received_anns] : policy->received_queue) {
-        // Find the current best announcement for this prefix (if it exists)
-        Announcement* current_best = nullptr;
-        auto it = policy->local_rib.find(prefix);
-        if (it != policy->local_rib.end()) {
-            current_best = &it->second;
-        }
-
-        // Compare against all newly received announcements
-        for (const auto& new_ann_const : received_anns) {
-            // The new path if we adopt this announcement includes our own ASN
-            Announcement potential_new_ann = new_ann_const;
-            potential_new_ann.as_path.insert(potential_new_ann.as_path.begin(), node->asn);
-
-            if (current_best == nullptr || is_better_announcement(potential_new_ann, *current_best, rel_scores)) {
-                // If the new one is better, it becomes the new best.
-                // We update the local_rib directly, and our pointer to it.
-                policy->local_rib[prefix] = potential_new_ann;
-                current_best = &policy->local_rib[prefix];
-            }
-        }
-    }
-
-    policy->received_queue.clear();
-}
+// Propagation logic has been moved to Propagation.cpp/Propagation.h
+// This keeps main.cpp focused on orchestration rather than implementation details
 
 
 int main(int argc, char* argv[]) {
@@ -131,143 +82,140 @@ int main(int argc, char* argv[]) {
     // ---------------------------------------------------------
     // 3. Configure ROV (Phase 4)
     // ---------------------------------------------------------
-    // TODO: Read rov_file. For every ASN in this file, set their policy to ROV.
+    std::cout << "\n[Step 3] Configuring ROV policies...\n";
+    std::unordered_set<uint32_t> rov_asns;
     
-    std::cout << "[Info] ROV policies applied (Placeholder).\n";
+    std::ifstream rov_stream(rov_file);
+    if (!rov_stream.is_open()) {
+        std::cerr << "Error: Could not open ROV ASNs file: " << rov_file << std::endl;
+        return 1;
+    }
+    
+    std::string rov_line;
+    // Skip header if present
+    if (std::getline(rov_stream, rov_line)) {
+        // Check if it's a header (contains non-numeric characters)
+        bool is_header = false;
+        for (char c : rov_line) {
+            if (!std::isdigit(c) && c != '\r' && c != '\n') {
+                is_header = true;
+                break;
+            }
+        }
+        if (!is_header) {
+            // First line is not a header, process it
+            uint32_t asn = std::stoul(rov_line);
+            rov_asns.insert(asn);
+        }
+    }
+    
+    // Read remaining ROV ASNs
+    while (std::getline(rov_stream, rov_line)) {
+        if (rov_line.empty()) continue;
+        // Remove any trailing whitespace
+        while (!rov_line.empty() && (rov_line.back() == '\r' || rov_line.back() == '\n' || rov_line.back() == ' ')) {
+            rov_line.pop_back();
+        }
+        if (rov_line.empty()) continue;
+        
+        try {
+            uint32_t asn = std::stoul(rov_line);
+            rov_asns.insert(asn);
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Could not parse ROV ASN: " << rov_line << std::endl;
+        }
+    }
+    rov_stream.close();
+    
+    // Apply ROV policies to the specified ASNs
+    for (uint32_t rov_asn : rov_asns) {
+        ASNode* node = graph.getOrCreateNode(rov_asn);
+        if (node) {
+            node->policy = std::make_shared<ROV>();
+        }
+    }
+    
+    std::cout << "[Info] ROV policies applied to " << rov_asns.size() << " ASNs.\n";
 
 
     // ---------------------------------------------------------
     // 4. Seed Announcements (Phase 3.4)
     // ---------------------------------------------------------
-    // For this example, we'll manually seed a single announcement
-    // instead of parsing the announcements file.
-    std::cout << "\n[Step 4] Seeding initial announcement...\n";
-
-    uint32_t seed_asn = 1;
-    ASNode* target_as = graph.getOrCreateNode(seed_asn);
-
-    if (target_as) {
-        std::string prefix = "1.2.0.0/16";
-        Announcement seed_announcement(
-            prefix,
-            {seed_asn},
-            seed_asn,
-            Relationship::ORIGIN
-        );
-
-        BGP* bgp_policy = dynamic_cast<BGP*>(target_as->policy.get());
-        if (bgp_policy) {
-            bgp_policy->local_rib[seed_announcement.prefix] = seed_announcement;
-            std::cout << "Successfully seeded prefix " << prefix << " at ASN " << seed_asn << ".\n";
-            // Optional: Verify it's there
-            bgp_policy->local_rib.find(prefix)->second.print();
-        } else {
-            std::cerr << "Error: Could not retrieve BGP policy for ASN " << seed_asn << std::endl;
-        }
-    } else {
-        std::cerr << "Error: Could not find or create ASN " << seed_asn << " for seeding." << std::endl;
+    std::cout << "\n[Step 4] Seeding announcements from file...\n";
+    
+    std::ifstream ann_stream(ann_file);
+    if (!ann_stream.is_open()) {
+        std::cerr << "Error: Could not open announcements file: " << ann_file << std::endl;
+        return 1;
     }
+    
+    std::string ann_line;
+    // Skip header line
+    std::getline(ann_stream, ann_line);
+    
+    int seeded_count = 0;
+    while (std::getline(ann_stream, ann_line)) {
+        if (ann_line.empty()) continue;
+        
+        // Parse CSV: seed_asn,prefix,rov_invalid
+        std::istringstream iss(ann_line);
+        std::string seed_asn_str, prefix, rov_invalid_str;
+        
+        if (!std::getline(iss, seed_asn_str, ',') ||
+            !std::getline(iss, prefix, ',') ||
+            !std::getline(iss, rov_invalid_str, ',')) {
+            std::cerr << "Warning: Could not parse announcement line: " << ann_line << std::endl;
+            continue;
+        }
+        
+        // Remove any whitespace
+        seed_asn_str.erase(0, seed_asn_str.find_first_not_of(" \t\r\n"));
+        seed_asn_str.erase(seed_asn_str.find_last_not_of(" \t\r\n") + 1);
+        prefix.erase(0, prefix.find_first_not_of(" \t\r\n"));
+        prefix.erase(prefix.find_last_not_of(" \t\r\n") + 1);
+        rov_invalid_str.erase(0, rov_invalid_str.find_first_not_of(" \t\r\n"));
+        rov_invalid_str.erase(rov_invalid_str.find_last_not_of(" \t\r\n") + 1);
+        
+        try {
+            uint32_t seed_asn = std::stoul(seed_asn_str);
+            bool rov_invalid = (rov_invalid_str == "True" || rov_invalid_str == "true" || rov_invalid_str == "1");
+            
+            ASNode* target_as = graph.getOrCreateNode(seed_asn);
+            if (target_as) {
+                Announcement seed_announcement(
+                    prefix,
+                    {seed_asn},
+                    seed_asn,
+                    Relationship::ORIGIN,
+                    rov_invalid
+                );
+                
+                BGP* bgp_policy = dynamic_cast<BGP*>(target_as->policy.get());
+                if (bgp_policy) {
+                    bgp_policy->local_rib[seed_announcement.prefix] = seed_announcement;
+                    seeded_count++;
+                } else {
+                    std::cerr << "Error: Could not retrieve BGP policy for ASN " << seed_asn << std::endl;
+                }
+            } else {
+                std::cerr << "Error: Could not find or create ASN " << seed_asn << " for seeding." << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Could not parse announcement line: " << ann_line << " (" << e.what() << ")" << std::endl;
+        }
+    }
+    ann_stream.close();
+    
+    std::cout << "[Info] Successfully seeded " << seeded_count << " announcements.\n";
 
 
 
     // ---------------------------------------------------------
     // 5. Run Propagation (Phase 3.5)
     // ---------------------------------------------------------
-    std::cout << "\n[Step 5] Running BGP propagation...\n";
-
-    // Get the ranked graph structure for propagation
-    auto ranked_ases = graph.getRankedASes();
-    int max_rank = ranked_ases.size() - 1;
-
-    // Define relationship scores for conflict resolution
-    const std::unordered_map<Relationship, int> rel_scores = {
-        {Relationship::ORIGIN, 3},
-        {Relationship::CUSTOMER, 2},
-        {Relationship::PEER, 1},
-        {Relationship::PROVIDER, 0}
-    };
-
-    // --- PHASE 1: PROPAGATE UP (Customers to Providers) ---
-    std::cout << "  - Propagating UP from customers to providers...\n";
-    for (int rank = 0; rank <= max_rank; ++rank) {
-        // First, all nodes at this rank process announcements they have received
-        for (ASNode* node : ranked_ases[rank]) {
-            process_announcements(node, rel_scores);
-        }
-
-        // Second, all nodes at this rank send from their updated local RIB to providers
-        for (ASNode* node : ranked_ases[rank]) {
-            BGP* policy = dynamic_cast<BGP*>(node->policy.get());
-            if (!policy) continue;
-
-            for (auto const& [prefix, ann] : policy->local_rib) {
-                for (ASNode* provider : node->providers) {
-                    BGP* provider_policy = dynamic_cast<BGP*>(provider->policy.get());
-                    if (provider_policy) {
-                        Announcement prop_ann = ann;
-                        prop_ann.next_hop_asn = node->asn;
-                        prop_ann.received_from_relationship = Relationship::CUSTOMER;
-                        provider_policy->received_queue[prefix].push_back(prop_ann);
-                    }
-                }
-            }
-        }
-    }
-
-    // --- PHASE 2: PROPAGATE ACROSS (to Peers) ---
-    std::cout << "  - Propagating ACROSS to peers...\n";
-    // First, all ASes send to their peers
-    for (auto const& [asn, node_ptr] : graph.getNodes()) {
-        ASNode* node = node_ptr.get();
-        BGP* policy = dynamic_cast<BGP*>(node->policy.get());
-        if (!policy) continue;
-
-        for (auto const& [prefix, ann] : policy->local_rib) {
-            for (ASNode* peer : node->peers) {
-                BGP* peer_policy = dynamic_cast<BGP*>(peer->policy.get());
-                if (peer_policy) {
-                    Announcement prop_ann = ann;
-                    prop_ann.next_hop_asn = node->asn;
-                    prop_ann.received_from_relationship = Relationship::PEER;
-                    peer_policy->received_queue[prefix].push_back(prop_ann);
-                }
-            }
-        }
-    }
-
-    // Second, all ASes process announcements received from peers
-    for (auto const& [asn, node_ptr] : graph.getNodes()) {
-        process_announcements(node_ptr.get(), rel_scores);
-    }
-
-    // --- PHASE 3: PROPAGATE DOWN (Providers to Customers) ---
-    std::cout << "  - Propagating DOWN from providers to customers...\n";
-    for (int rank = max_rank; rank >= 0; --rank) {
-        // First, process any announcements received from the previous (higher) rank or peers
-         for (ASNode* node : ranked_ases[rank]) {
-            process_announcements(node, rel_scores);
-        }
-
-        // Second, send from local RIB to all customers
-        for (ASNode* node : ranked_ases[rank]) {
-            BGP* policy = dynamic_cast<BGP*>(node->policy.get());
-            if (!policy) continue;
-
-            for (auto const& [prefix, ann] : policy->local_rib) {
-                for (ASNode* customer : node->customers) {
-                    BGP* customer_policy = dynamic_cast<BGP*>(customer->policy.get());
-                    if (customer_policy) {
-                        Announcement prop_ann = ann;
-                        prop_ann.next_hop_asn = node->asn;
-                        prop_ann.received_from_relationship = Relationship::PROVIDER;
-                        customer_policy->received_queue[prefix].push_back(prop_ann);
-                    }
-                }
-            }
-        }
-    }
-    
-    std::cout << "[Info] Propagation complete.\n";
+    // All propagation logic is abstracted into PropagationEngine
+    // This includes the three phases: UP, ACROSS, and DOWN
+    PropagationEngine::run_propagation(graph);
 
 
 
@@ -282,28 +230,33 @@ int main(int argc, char* argv[]) {
     }
 
     // Write Header
-    out_file << "asn,prefix,as path\n";
+    out_file << "asn,prefix,as_path\n";
 
     // Iterate through all AS nodes and their Local RIBs to dump data
     for (const auto& pair : graph.getNodes()) {
         ASNode* node = pair.second.get();
+        // ROV extends BGP, so dynamic_cast<BGP*> will work for both BGP and ROV policies
         BGP* policy = dynamic_cast<BGP*>(node->policy.get());
 
         if (policy) {
             for (const auto& rib_entry : policy->local_rib) {
                 const Announcement& ann = rib_entry.second;
                 
-                // Format the AS path
-                std::string path_str;
+                // Format the AS path as a Python tuple: "(1, 2, 3)" or "(1,)" for single element
+                std::string path_str = "(";
                 for (size_t i = 0; i < ann.as_path.size(); ++i) {
                     path_str += std::to_string(ann.as_path[i]);
                     if (i < ann.as_path.size() - 1) {
-                        path_str += "-";
+                        path_str += ", ";
+                    } else if (ann.as_path.size() == 1) {
+                        // Single-element tuple requires trailing comma in Python
+                        path_str += ",";
                     }
                 }
+                path_str += ")";
 
-                // Write to file
-                out_file << node->asn << "," << ann.prefix << "," << path_str << "\n";
+                // Write to file (quote the path_str since it contains commas)
+                out_file << node->asn << "," << ann.prefix << ",\"" << path_str << "\"\n";
             }
         }
     }
