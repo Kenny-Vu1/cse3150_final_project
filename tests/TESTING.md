@@ -6,7 +6,7 @@ This document describes the testing strategy and test coverage for the BGP Simul
 
 The project includes two test suites:
 
-### 1. Unit Tests (`src/test_as_graph.cpp`)
+### Unit Tests (`tests/test_as_graph.cpp`)
 Tests for AS graph creation and validation:
 - **Simple Graph**: Basic provider-customer relationships
 - **Provider Cycle Detection**: Verifies cycle detection works correctly
@@ -15,11 +15,11 @@ Tests for AS graph creation and validation:
 
 **Run with:**
 ```bash
-g++ src/test_as_graph.cpp src/ASGraph.cpp -Iinclude -o test_as_graph -std=c++17
+g++ tests/test_as_graph.cpp src/ASGraph.cpp -Iinclude -o test_as_graph -std=c++17
 ./test_as_graph
 ```
 
-### 2. System Tests (`src/test_bgp_system.cpp`)
+### System Tests (`tests/test_bgp_system.cpp`)
 End-to-end tests for BGP propagation:
 - **Single Announcement (Tiny Graph)**: Tests basic propagation with minimal graph
 - **Larger Graph**: Tests propagation through multiple ASes with various relationships
@@ -29,7 +29,7 @@ End-to-end tests for BGP propagation:
 
 **Run with:**
 ```bash
-g++ src/test_bgp_system.cpp src/Propagation.cpp src/ASGraph.cpp src/parse_caida.cpp -Iinclude -o test_bgp_system -std=c++17 -lcurl
+g++ tests/test_bgp_system.cpp src/Propagation.cpp src/ASGraph.cpp src/parse_caida.cpp -Iinclude -o test_bgp_system -std=c++17 -lcurl
 ./test_bgp_system
 ```
 
@@ -37,23 +37,23 @@ g++ src/test_bgp_system.cpp src/Propagation.cpp src/ASGraph.cpp src/parse_caida.
 
 ### Requirements Coverage
 
-#### 2.4 Testing the AS Graph ✓
-- ✅ **Unit tests for graph creation**: `test_as_graph.cpp` includes tests for:
+#### Testing the AS Graph
+- **Unit tests for graph creation**: `tests/test_as_graph.cpp` includes tests for:
   - Node creation and relationship addition
   - Cycle detection
   - Peer vs provider-customer relationships
   - Complex graph structures
 
-- ✅ **System tests with mini-graphs**: `test_bgp_system.cpp` includes:
+- **System tests with mini-graphs**: `tests/test_bgp_system.cpp` includes:
   - Tiny graph (2 nodes)
   - Larger graph (5+ nodes)
   - Various relationship configurations
 
-#### 3.7 Output and Tests ✓
-- ✅ **Single announcement test**: `test_single_announcement_tiny_graph()` seeds one announcement and verifies propagation
-- ✅ **Larger test graph**: `test_larger_graph()` tests with multiple ASes and relationships
-- ✅ **Multiple announcements for same prefix**: `test_multiple_announcements_same_prefix()` tests best path selection
-- ✅ **Output format verification**: `test_output_format()` validates CSV format including Python tuple syntax
+#### Output and Tests
+- **Single announcement test**: `test_single_announcement_tiny_graph()` seeds one announcement and verifies propagation
+- **Larger test graph**: `test_larger_graph()` tests with multiple ASes and relationships
+- **Multiple announcements for same prefix**: `test_multiple_announcements_same_prefix()` tests best path selection
+- **Output format verification**: `test_output_format()` validates CSV format including Python tuple syntax
 
 ## Test Execution
 
@@ -61,11 +61,11 @@ g++ src/test_bgp_system.cpp src/Propagation.cpp src/ASGraph.cpp src/parse_caida.
 
 ```bash
 # Compile and run unit tests
-g++ src/test_as_graph.cpp src/ASGraph.cpp -Iinclude -o test_as_graph -std=c++17
+g++ tests/test_as_graph.cpp src/ASGraph.cpp -Iinclude -o test_as_graph -std=c++17
 ./test_as_graph
 
 # Compile and run system tests
-g++ src/test_bgp_system.cpp src/*.cpp -Iinclude -o test_bgp_system -std=c++17 -lcurl
+g++ tests/test_bgp_system.cpp src/Propagation.cpp src/ASGraph.cpp src/parse_caida.cpp -Iinclude -o test_bgp_system -std=c++17 -lcurl
 ./test_bgp_system
 ```
 
@@ -100,9 +100,9 @@ These are verified using the `compare_output.sh` script to ensure output matches
 ## Future Test Improvements
 
 Potential additions:
-1. **Performance tests**: Measure propagation time for various graph sizes
-2. **ROV tests**: Verify ROV filtering works correctly
-3. **Edge case tests**: Empty graphs, disconnected components, etc.
-4. **Property-based tests**: Generate random graphs and verify invariants
-5. **Regression tests**: Capture known bugs and ensure they don't reappear
+- **Performance tests**: Measure propagation time for various graph sizes
+- **ROV tests**: Verify ROV filtering works correctly
+- **Edge case tests**: Empty graphs, disconnected components, etc.
+- **Property-based tests**: Generate random graphs and verify invariants
+- **Regression tests**: Capture known bugs and ensure they don't reappear
 

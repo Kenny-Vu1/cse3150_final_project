@@ -184,6 +184,10 @@ cse3150_final_project/
 │   ├── Announcement.h        # Announcement struct and Relationship enum
 │   ├── Policy.h              # BGP and ROV policy classes
 │   └── parse_caida.h         # Parsing function declarations
+├── tests/
+│   ├── test_as_graph.cpp     # Unit tests for AS graph creation
+│   ├── test_bgp_system.cpp   # System tests for BGP propagation
+│   └── TESTING.md            # Testing documentation
 ├── README.md                 # This file
 └── bgp_simulator             # Compiled executable
 ```
@@ -192,16 +196,22 @@ cse3150_final_project/
 
 The codebase follows a **separation of concerns** principle:
 
-- **main.cpp**: High-level orchestration - argument parsing, file I/O, calling modules
-- **Propagation.cpp**: All BGP propagation logic - three-phase algorithm, best path selection
-- **ASGraph.cpp**: Graph structure and operations - ranking, cycle detection, node management
-- **parse_caida.cpp**: Input parsing - CAIDA file format handling
+- **src/**: Production source code
+  - **main.cpp**: High-level orchestration - argument parsing, file I/O, calling modules
+  - **Propagation.cpp**: All BGP propagation logic - three-phase algorithm, best path selection
+  - **ASGraph.cpp**: Graph structure and operations - ranking, cycle detection, node management
+  - **parse_caida.cpp**: Input parsing - CAIDA file format handling
+- **tests/**: Test code separated from production code
+  - **test_as_graph.cpp**: Unit tests for graph functionality
+  - **test_bgp_system.cpp**: System tests for BGP propagation
+  - **TESTING.md**: Testing documentation
 
 This organization makes the code:
-- **More maintainable**: Each module has a clear responsibility
-- **Easier to test**: Modules can be tested independently
+- **More maintainable**: Each module has a clear responsibility, tests are separate from production code
+- **Easier to test**: Modules can be tested independently, test files are organized in dedicated directory
 - **More readable**: main.cpp shows the high-level flow without implementation details
 - **More extensible**: New propagation algorithms can be added without touching main.cpp
+- **Better organized**: Clear separation between production code (`src/`) and test code (`tests/`)
 
 ## Key Features
 
@@ -249,16 +259,16 @@ Implements the three-tier BGP decision process:
 
 The simulator includes comprehensive testing at multiple levels:
 
-### Unit Tests (`src/test_as_graph.cpp`)
+### Unit Tests (`tests/test_as_graph.cpp`)
 Tests for AS graph creation and validation:
 - Simple graph creation
 - Provider cycle detection
 - Peer relationship handling
 - Complex graph structures
 
-**Run:** `g++ src/test_as_graph.cpp src/ASGraph.cpp -Iinclude -o test_as_graph -std=c++17 && ./test_as_graph`
+**Run:** `g++ tests/test_as_graph.cpp src/ASGraph.cpp -Iinclude -o test_as_graph -std=c++17 && ./test_as_graph`
 
-### System Tests (`src/test_bgp_system.cpp`)
+### System Tests (`tests/test_bgp_system.cpp`)
 End-to-end tests for BGP propagation:
 - Single announcement with tiny graph
 - Larger graph propagation
@@ -266,7 +276,7 @@ End-to-end tests for BGP propagation:
 - Customer vs provider preference
 - Output format verification
 
-**Run:** `g++ src/test_bgp_system.cpp src/Propagation.cpp src/ASGraph.cpp src/parse_caida.cpp -Iinclude -o test_bgp_system -std=c++17 -lcurl && ./test_bgp_system`
+**Run:** `g++ tests/test_bgp_system.cpp src/Propagation.cpp src/ASGraph.cpp src/parse_caida.cpp -Iinclude -o test_bgp_system -std=c++17 -lcurl && ./test_bgp_system`
 
 ### Benchmark Tests
 Validated against provided benchmark datasets:
@@ -281,11 +291,11 @@ See `TESTING.md` for detailed testing documentation.
 ## Future Improvements
 
 Potential optimizations for larger datasets:
-1. **Parallel processing**: Propagate different prefixes in parallel
-2. **Incremental updates**: Only process changed announcements
-3. **Memory pooling**: Reuse announcement objects
-4. **Compressed storage**: Use more compact data structures for AS paths
-5. **Output streaming**: Write results incrementally instead of building in memory
+- **Parallel processing**: Propagate different prefixes in parallel
+- **Incremental updates**: Only process changed announcements
+- **Memory pooling**: Reuse announcement objects
+- **Compressed storage**: Use more compact data structures for AS paths
+- **Output streaming**: Write results incrementally instead of building in memory
 
 ## License
 
