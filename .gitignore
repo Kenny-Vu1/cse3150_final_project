@@ -5,3 +5,5 @@ download_caida
 parse_caida
 ribs.csv
 test_runner
+test_as_graph
+test_bgp_system
